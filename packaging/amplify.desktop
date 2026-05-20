@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Amplify
+Comment=Arch Linux soundboard with virtual microphone support
+Exec=amplify
+Icon=audio-speaker-symbolic
+Categories=Audio;Multimedia;Utility;
+Terminal=false
+Keywords=sound;soundboard;audio;microphone;pipewire;voicemod;
