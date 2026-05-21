@@ -1,0 +1,18 @@
+pkgbase = amplify
+	pkgdesc = Arch Linux soundboard with PipeWire virtual microphone support
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/Sage563/amplify
+	arch = any
+	license = MIT
+	makedepends = python-build
+	makedepends = python-installer
+	makedepends = python-wheel
+	makedepends = python-pip
+	depends = python
+	depends = pipewire
+	optdepends = pulseaudio: alternative audio backend
+	source = amplify-0.1.0.tar.gz::https://github.com/Sage563/amplify/archive/refs/tags/v0.1.0.tar.gz
+	sha512sums = cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e amplify-0.1.0.tar.gz
+
+pkgname = amplify

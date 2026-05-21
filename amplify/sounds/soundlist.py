@@ -5,7 +5,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-SOUNDS_URL = "https://cdn.jsdelivr.net/gh/sage563/Amplify@master/sounds.txt"
+SOUNDS_URL = "https://cdn.jsdelivr.net/gh/Sage563/Amplify@master/sounds.txt"
 BASE_CDN_URL = "https://mathactivities.github.io/sd"
 
 

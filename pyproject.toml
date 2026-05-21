@@ -47,6 +47,9 @@ amplify = "amplify.main:main"
 [tool.setuptools]
 packages = ["amplify", "amplify.ui", "amplify.audio", "amplify.sounds"]
 
+[tool.setuptools.data-files]
+"share/applications" = ["packaging/amplify.desktop"]
+
 [tool.black]
 line-length = 88
 target-version = ["py39"]
