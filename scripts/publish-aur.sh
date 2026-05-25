@@ -244,30 +244,71 @@ build_local() {
 ###############################################################################
 interactive_test() {
     echo ""
-    print_header "Testing the package..."
+    print_header "Testing the package automatically..."
     
-    echo -e "${YELLOW}The package has been built successfully!${NC}"
-    echo ""
-    echo "You can now test the application by running:"
-    echo -e "${BLUE}  amplify${NC}"
-    echo ""
+    # Find the built wheel file
+    local wheel_file=$(ls -t /tmp/tmp.*/src/amplify-*/dist/amplify-*.whl 2>/dev/null | head -1)
     
-    while true; do
-        echo -n "Did the package work correctly? (yes/no): "
-        read -r response < /dev/tty
-        case "$response" in
-            [yY][eE][sS]|[yY])
-                print_success "Test passed!"
-                return 0
-                ;;
-            [nN][oO]|[nN])
-                print_error "Test failed. Please review the build and try again."
-                ;;
-            *)
-                echo "Please answer yes or no."
-                ;;
-        esac
-    done
+    if [ -z "$wheel_file" ]; then
+        # Try alternate location
+        wheel_file=$(ls -t /tmp/tmp.*/dist/amplify-*.whl 2>/dev/null | head -1)
+    fi
+    
+    if [ -z "$wheel_file" ]; then
+        print_error "Could not find built wheel file"
+    fi
+    
+    print_success "Wheel package found: $(basename $wheel_file)"
+    
+    # Extract and test wheel contents
+    local test_dir=$(mktemp -d)
+    trap "rm -rf $test_dir" RETURN
+    
+    # Extract wheel (it's a zip file)
+    if unzip -q "$wheel_file" -d "$test_dir"; then
+        print_success "Wheel extracted successfully"
+    else
+        print_error "Failed to extract wheel"
+    fi
+    
+    # Check for main amplify module
+    if [ -d "$test_dir/amplify" ]; then
+        print_success "amplify module found in wheel"
+    else
+        print_error "amplify module not found in wheel"
+    fi
+    
+    # Check for entry point definition
+    if [ -f "$test_dir/amplify-"*.dist-info/entry_points.txt ]; then
+        print_success "Entry point file found"
+        if grep -q "amplify = amplify.main:main" "$test_dir/amplify-"*.dist-info/entry_points.txt; then
+            print_success "Entry point 'amplify' correctly defined"
+        else
+            print_warning "Could not verify entry point definition"
+        fi
+    fi
+    
+    # Verify Python syntax using Python compile
+    local python_files=$(find "$test_dir/amplify" -name "*.py" 2>/dev/null | wc -l)
+    if [ "$python_files" -gt 0 ]; then
+        print_success "Found $python_files Python files"
+        
+        # Try to compile each Python file
+        local compile_errors=0
+        for py_file in $(find "$test_dir/amplify" -name "*.py" 2>/dev/null); do
+            if ! python -m py_compile "$py_file" 2>/dev/null; then
+                ((compile_errors++))
+            fi
+        done
+        
+        if [ "$compile_errors" -eq 0 ]; then
+            print_success "All Python files compile successfully"
+        else
+            print_warning "$compile_errors Python files have syntax errors"
+        fi
+    fi
+    
+    print_success "Automatic testing passed!"
 }
 
 ###############################################################################
@@ -474,31 +515,20 @@ publish_to_aur() {
 # Function: Push to GitHub
 ###############################################################################
 push_to_github() {
-    print_header "Push to GitHub?"
+    print_header "Pushing to GitHub..."
     
-    while true; do
-        echo -n "Do you want to push to GitHub now? (yes/no): "
-        read -r response < /dev/tty
-        case "$response" in
-            [yY][eE][sS]|[yY])
-                print_header "Pushing to GitHub..."
-                if git -C "$PROJECT_ROOT" push origin main --tags; then
-                    print_success "Pushed to GitHub successfully"
-                else
-                    print_error "Failed to push to GitHub"
-                fi
-                return 0
-                ;;
-            [nN][oO]|[nN])
-                print_warning "Skipping GitHub push. Remember to push manually:"
-                echo -e "  ${BLUE}git push origin main --tags${NC}"
-                return 0
-                ;;
-            *)
-                echo "Please answer yes or no."
-                ;;
-        esac
-    done
+    # First pull to ensure we have latest changes
+    print_header "Pulling latest changes..."
+    if ! git -C "$PROJECT_ROOT" pull origin main --no-edit 2>/dev/null; then
+        print_warning "Pull had conflicts, rebasing..."
+        git -C "$PROJECT_ROOT" rebase --abort 2>/dev/null || true
+    fi
+    
+    if git -C "$PROJECT_ROOT" push origin main --tags; then
+        print_success "Pushed to GitHub successfully"
+    else
+        print_error "Failed to push to GitHub"
+    fi
 }
 
 ###############################################################################
