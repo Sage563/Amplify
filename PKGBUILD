@@ -1,6 +1,6 @@
 # Maintainer: Amplify <advikmurthy12@gmail.com>
 pkgname=amplify
-pkgver=0.1.3
+pkgver=0.1.4
 pkgrel=1
 pkgdesc="Arch Linux soundboard with PipeWire virtual microphone support"
 arch=('any')
@@ -20,7 +20,7 @@ optdepends=(
     'pulseaudio: alternative audio backend'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha512sums=('aae34fbe1eb3f092b030dea7e24f981f29a3bab104f6743017cf12e3e5edcaf1280378e07fbef6ebe1bd818dc2db0b508c3faefc7e1d3cd6a4801f1ea047e3ab')
+sha512sums=('e7df13ee234db890e044e04cc9496d2b55b6a36c8c96151b0a7dd6d4c2bae7ab43cf5e090182344138b5e7b7c80ce27d8c7ebe42614c819b96967a816686ea93')
 
 build() {
     cd "Amplify-$pkgver"
