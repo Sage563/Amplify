@@ -4,21 +4,41 @@ This guide explains how to use the AUR publishing script and manage the Amplify 
 
 ## Quick Start
 
+### One-Time Setup
+
+Configure AUR repository location (this is remembered):
+
+```bash
+./scripts/publish-aur.sh --setup-aur
+```
+
+### Publish New Version
+
+```bash
+./scripts/publish-aur.sh 0.1.1
+```
+
+That's it! The script handles everything - builds, tests, GitHub push, AND AUR publication automatically.
+
 ### Prerequisites
 
 Before publishing to AUR, ensure you have:
 
 1. **Build tools installed:**
    ```bash
-   sudo pacman -S base-devel git wget
+   sudo pacman -S base-devel git wget python-build python-installer
    ```
 
-2. **SSH key configured for AUR:**
+2. **SSH key configured for AUR (needed for first setup only):**
    - Generate SSH key if you don't have one:
      ```bash
      ssh-keygen -t ed25519
      ```
    - Upload your public key to your AUR account at https://aur.archlinux.org
+   - Test connection:
+     ```bash
+     ssh -T aur@aur.archlinux.org
+     ```
 
 3. **Git configured globally:**
    ```bash
@@ -26,75 +46,112 @@ Before publishing to AUR, ensure you have:
    git config --global user.email "your.email@example.com"
    ```
 
-### Publishing a New Version
+## Automated Publication Workflow
 
-1. **Run the publishing script:**
-   ```bash
-   ./scripts/publish-aur.sh 0.1.1
-   ```
-   
-   Or without specifying version (interactive):
-   ```bash
-   ./scripts/publish-aur.sh
-   ```
+The script now automatically handles all steps - GitHub AND AUR publication:
 
-2. **The script will:**
-   - ✓ Check build dependencies
-   - ✓ Update version in `PKGBUILD` and `pyproject.toml`
-   - ✓ Calculate SHA512 checksums
-   - ✓ Build the package locally using `makepkg`
-   - ✓ Prompt you to test the built package
-   - ✓ Ask for confirmation before pushing
-   - ✓ Create git tags and commits
-   - ✓ Optionally push to GitHub
+1. ✅ **Validate environment**
+   - Check build dependencies
+   - Validate version format
 
-3. **After the script completes, publish to AUR:**
-   ```bash
-   # Clone the AUR repository (one-time)
-   git clone ssh://aur@aur.archlinux.org/amplify.git aur-amplify
-   cd aur-amplify
-   
-   # Copy files from this repository
-   cp ../Amplify/PKGBUILD .
-   cp ../Amplify/packaging/amplify.desktop .
-   
-   # Generate .SRCINFO
-   makepkg --printsrcinfo > .SRCINFO
-   
-   # Commit and push
-   git add PKGBUILD .SRCINFO
-   git commit -m "Release version X.Y.Z"
-   git push
-   ```
+2. ✅ **Build and test**
+   - Update versions in PKGBUILD and pyproject.toml
+   - Create source tarball
+   - Calculate SHA512 checksums
+   - Build package locally with makepkg
+   - Prompt you to test the built package
+
+3. ✅ **GitHub operations**
+   - Commit version updates
+   - Create annotated git tag
+   - Push to GitHub with tags
+
+4. ✅ **AUR publication** (if configured)
+   - Copy PKGBUILD to AUR repository
+   - Generate .SRCINFO file
+   - Commit to AUR repository
+   - Push to AUR
+
+## One-Time AUR Setup
+
+Run this once to configure your AUR repository:
+
+```bash
+./scripts/publish-aur.sh --setup-aur
+```
+
+The script will:
+1. Ask if you want to set up AUR publication
+2. Prompt for your AUR repository path (defaults to `~/aur-amplify`)
+3. Clone your AUR repository via SSH
+4. Save configuration to `~/.config/amplify-aur/config.sh`
+
+**After this setup, all AUR operations are automatic!**
 
 ## Script Features
 
 ### Automatic Checksums
-The script automatically downloads the source from GitHub (or creates a local tarball) and calculates the correct SHA512 checksum for the `PKGBUILD` file.
+The script automatically:
+- Creates a source tarball with all necessary files
+- Calculates SHA512 checksum
+- Updates PKGBUILD with correct checksum
+- Validates checksums before build
 
 ### Local Build Testing
-The script builds the package locally using `makepkg` to ensure it compiles correctly before any commits are made.
+The script:
+- Builds the package locally using `makepkg`
+- Runs verification checks
+- Installs the package for user testing
+- Prompts for confirmation before proceeding
 
 ### Interactive Confirmation
-The script prompts you to test the built package and confirm it works correctly before proceeding to commits and pushes.
+The script prompts you at key points:
+- Ask if package works after installation
+- Ask if you want to push to GitHub
 
 ### Git Operations
 The script automatically:
-- Commits changes to `PKGBUILD` and `pyproject.toml`
+- Commits changes to PKGBUILD and pyproject.toml
 - Creates an annotated git tag
-- Optionally pushes to GitHub
+- Pushes to GitHub
+
+### AUR Publication (Automatic After Setup)
+The script automatically:
+- Copies updated PKGBUILD to your AUR repository
+- Generates .SRCINFO file
+- Commits changes with version message
+- Pushes to AUR
 
 ## Directory Structure
 
+### Main Repository
 ```
 Amplify/
 ├── scripts/
 │   └── publish-aur.sh       # Main AUR publishing script
+├── docs/
+│   └── AUR_PUBLISHING.md    # Full documentation (this file)
 ├── PKGBUILD                 # Arch Linux package build file
 ├── pyproject.toml           # Python project configuration
 ├── packaging/
 │   └── amplify.desktop      # Desktop entry file
-└── ...
+└── .gitignore               # Excludes build artifacts
+```
+
+### Configuration Storage
+Your AUR repository configuration is stored in:
+```
+~/.config/amplify-aur/config.sh
+```
+
+This file contains the path to your cloned AUR repository and is created automatically during setup.
+
+### Your AUR Repository (separate)
+```
+aur-amplify/  (or custom path)
+├── PKGBUILD                # Updated by script
+├── .SRCINFO                # Generated by script
+└── .git/
 ```
 
 ## Troubleshooting
@@ -111,21 +168,51 @@ Amplify/
 
 ### SSH connection to AUR fails
 
-**Problem:** Cannot push to AUR repo
+**Problem:** Cannot clone or push to AUR repo (first setup or later)
 
 **Solution:**
 1. Verify SSH key is uploaded to your AUR account
 2. Test SSH connection: `ssh -T aur@aur.archlinux.org`
 3. Ensure SSH key permissions: `chmod 600 ~/.ssh/id_ed25519`
+4. Check your AUR account permissions at aur.archlinux.org
 
 ### Checksums don't match
 
 **Problem:** Package fails to download on user's machine
 
 **Solution:**
-1. Verify the GitHub tag matches the version in `PKGBUILD`
+1. Verify GitHub tag exists: `git tag -l | grep v0.1.1`
 2. Run the script again to recalculate checksums
-3. Ensure no file corruption during tarball creation
+3. Ensure source tarball is created correctly
+
+### "AUR repository not configured" message
+
+**Problem:** Script can't find AUR repository path
+
+**Solution:**
+1. Run setup: `./scripts/publish-aur.sh --setup-aur`
+2. Verify config file exists: `cat ~/.config/amplify-aur/config.sh`
+3. Check AUR repository path is correct and accessible
+
+### Can't push to AUR during publication
+
+**Problem:** Script fails when pushing to AUR after build succeeds
+
+**Solution:**
+1. Verify SSH connection works: `ssh -T aur@aur.archlinux.org`
+2. Check you have push access to the AUR repository
+3. Verify AUR repository path is correct
+4. Try manual push to debug: `cd <aur-repo> && git push`
+
+### Reconfigure AUR repository
+
+**Problem:** Need to change AUR repository location
+
+**Solution:**
+```bash
+rm ~/.config/amplify-aur/config.sh
+./scripts/publish-aur.sh --setup-aur
+```
 
 ## File Locations
 
@@ -134,6 +221,7 @@ Amplify/
 - **Python config:** `pyproject.toml` (root directory)
 - **Desktop entry:** `packaging/amplify.desktop`
 - **License:** `LICENSE`
+- **AUR config:** `~/.config/amplify-aur/config.sh` (created on first setup)
 
 ## Build Artifacts (in .gitignore)
 
@@ -142,6 +230,7 @@ The following files are automatically ignored and not committed:
 - `amplify-*.pkg.tar.*` - Built packages
 - `.SRCINFO` - AUR source information
 - `build.log` - Build logs
+- `src/` - Extracted source during build
 
 ## Automatic Version Updates
 
@@ -151,9 +240,37 @@ The script updates versions in:
 
 This ensures consistency across all build systems.
 
+## Advanced Usage
+
+### Manual AUR Publish (if automated fails)
+
+If automatic AUR publication fails, you can do it manually:
+
+```bash
+cd ~/.config/amplify-aur/aur-amplify  # or your AUR repo path
+cp ../../../Documents/GitHub/Amplify/PKGBUILD .
+makepkg --printsrcinfo > .SRCINFO
+git add PKGBUILD .SRCINFO
+git commit -m "Release version 0.1.1"
+git push
+```
+
+### Check Script Status
+
+The script prints detailed information:
+- ✓ for successful operations
+- ✗ for failed operations
+- ▶ for current step
+- ⚠ for warnings
+- ✓ Checksums updated
+- ✓ Build successful
+- ✓ Test passed
+
 ## Additional Resources
 
 - [AUR Submission Guidelines](https://wiki.archlinux.org/title/AUR_submit_guidelines)
 - [PKGBUILD Reference](https://wiki.archlinux.org/title/PKGBUILD)
 - [makepkg Manual](https://man.archlinux.org/man/makepkg.8)
 - [Amplify GitHub Repository](https://github.com/Sage563/Amplify)
+- [AUR Web Interface](https://aur.archlinux.org)
+- [Quick Start Guide](../AUR_QUICK_START.md)
