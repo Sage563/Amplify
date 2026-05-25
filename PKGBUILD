@@ -20,7 +20,7 @@ optdepends=(
     'pulseaudio: alternative audio backend'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha512sums=('a95e7746d5995974f01f87f690d5321ee48b5ae964e5b135e647bb105444c7306407aa967758bd638f4bc9ce75d12d7e2606de07c629e403862a0e0ff22830a4')
+sha512sums=('a9872f25ed7293fe4f1d0e3cf7b3387cdf508cade64565e8c70dac185a734c324aa1ca2a4b8e51bf373567c986b51d83a3d3c1dcfe82b856845659eee4ad76f9')
 
 build() {
     cd "$pkgname-$pkgver"
