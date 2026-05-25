@@ -47,3 +47,11 @@ Thumbs.db
 # Project specific
 *.mp3
 cache/
+
+# AUR build artifacts
+amplify-*.tar.gz
+amplify-*.pkg.tar.*
+*.log
+build.log
+src/
+.SRCINFO
