@@ -28,6 +28,9 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# Project configuration
+PROJECT_NAME="amplify"
+
 # Version handling
 VERSION="${1:-}"
 CURRENT_VERSION=$(grep "pkgver=" "$PROJECT_ROOT/PKGBUILD" | cut -d= -f2)
@@ -117,44 +120,59 @@ update_version() {
 }
 
 ###############################################################################
-# Function: Calculate checksums
+# Function: Create source tarball
 ###############################################################################
-calculate_checksums() {
+create_source_tarball() {
     local version=$1
-    local tarball="$PROJECT_ROOT/${PROJECT_NAME}-${version}.tar.gz"
+    local output_file=$2
+    
+    print_header "Creating source tarball..."
+    
+    cd "$PROJECT_ROOT"
+    tar czf "$output_file" \
+        --exclude=.git \
+        --exclude=venv \
+        --exclude=build \
+        --exclude=dist \
+        --exclude='*.egg-info' \
+        --exclude=__pycache__ \
+        --exclude=.pytest_cache \
+        --exclude=.vscode \
+        --exclude=.idea \
+        --exclude=amplify-*.tar.gz \
+        --exclude=amplify-*.pkg.tar.* \
+        --transform="s,^,amplify-${version}/," \
+        pyproject.toml setup.py LICENSE README.md Makefile PKGBUILD amplify/ packaging/ 2>/dev/null || \
+    tar czf "$output_file" \
+        --exclude=.git \
+        --exclude=venv \
+        --exclude=build \
+        --exclude=dist \
+        --exclude='*.egg-info' \
+        --exclude=__pycache__ \
+        --exclude=.pytest_cache \
+        --exclude=.vscode \
+        --exclude=.idea \
+        --exclude=amplify-*.tar.gz \
+        --exclude=amplify-*.pkg.tar.* \
+        --transform="s,^,amplify-${version}/," \
+        pyproject.toml LICENSE README.md Makefile PKGBUILD amplify/ packaging/
+    
+    cd - > /dev/null
+    print_success "Tarball created: $output_file"
+}
+
+###############################################################################
+# Function: Update checksums from tarball
+###############################################################################
+update_checksums() {
+    local version=$1
+    local tarball=$2
     
     print_header "Calculating checksums for version $version..."
     
-    # Create a temporary directory for download simulation
-    local temp_dir=$(mktemp -d)
-    trap "rm -rf $temp_dir" EXIT
-    
-    cd "$temp_dir"
-    
-    # Download the source from GitHub
-    print_header "Downloading source from GitHub..."
-    if ! wget -q "https://github.com/Sage563/Amplify/archive/refs/tags/v${version}.tar.gz" -O "amplify-${version}.tar.gz" 2>/dev/null; then
-        print_warning "Could not download from GitHub (tag may not exist yet)"
-        print_header "Using local source for checksum calculation..."
-        
-        # Create tarball from current directory
-        tar czf "amplify-${version}.tar.gz" -C "$PROJECT_ROOT" \
-            --exclude=.git \
-            --exclude=venv \
-            --exclude=build \
-            --exclude=dist \
-            --exclude='*.egg-info' \
-            --exclude=__pycache__ \
-            --transform="s,^amplify/,amplify-${version}/," amplify/
-        
-        cd - > /dev/null
-        cp "$temp_dir/amplify-${version}.tar.gz" "$PROJECT_ROOT/amplify-${version}.tar.gz"
-    fi
-    
     # Calculate SHA512
-    local sha512=$(sha512sum "$temp_dir/amplify-${version}.tar.gz" | awk '{print $1}')
-    
-    cd - > /dev/null
+    local sha512=$(sha512sum "$tarball" | awk '{print $1}')
     
     print_success "SHA512: $sha512"
     
@@ -169,17 +187,23 @@ calculate_checksums() {
 ###############################################################################
 build_local() {
     local version=$1
+    local tarball=$2
     
     print_header "Building locally with makepkg..."
     
     local build_dir=$(mktemp -d)
     trap "rm -rf $build_dir" EXIT
     
-    cp "$PROJECT_ROOT/PKGBUILD" "$build_dir/"
+    # Copy tarball with the expected name to build directory
+    cp "$tarball" "$build_dir/amplify-${version}.tar.gz"
+    
+    # Create a modified PKGBUILD that uses local source
+    cat "$PROJECT_ROOT/PKGBUILD" | sed "s|source=(.*|source=(\"amplify-\${pkgver}.tar.gz\")|" > "$build_dir/PKGBUILD"
+    
     cd "$build_dir"
     
     print_header "Running makepkg (this may take a while)..."
-    if makepkg --syncdeps --install --noconfirm 2>&1 | tee build.log; then
+    if makepkg 2>&1 | tee build.log; then
         print_success "Build successful!"
         
         # Show build artifacts
@@ -349,11 +373,16 @@ main() {
         update_version "$VERSION"
     fi
     
-    # Calculate checksums
-    calculate_checksums "$VERSION"
+    # Create tarball once
+    local temp_tarball=$(mktemp)
+    trap "rm -f $temp_tarball" EXIT
+    create_source_tarball "$VERSION" "$temp_tarball"
+    
+    # Update checksums from tarball
+    update_checksums "$VERSION" "$temp_tarball"
     
     # Build locally
-    build_local "$VERSION"
+    build_local "$VERSION" "$temp_tarball"
     
     # Interactive test
     interactive_test

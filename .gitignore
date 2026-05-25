@@ -54,4 +54,3 @@ amplify-*.pkg.tar.*
 *.log
 build.log
 src/
-.SRCINFO
