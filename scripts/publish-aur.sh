@@ -9,10 +9,18 @@
 # 3. Updates PKGBUILD with correct checksums
 # 4. Prompts user for testing/confirmation
 # 5. Commits and pushes to GitHub
-# 6. Provides instructions for AUR publication
+# 6. Automatically publishes to AUR (after one-time setup)
 #
 # Usage: ./scripts/publish-aur.sh [version]
 # Example: ./scripts/publish-aur.sh 0.1.1
+#
+# First-time setup:
+#   ./scripts/publish-aur.sh --setup-aur
+# This will clone your AUR repository and remember the location
+#
+# After setup, just use:
+#   ./scripts/publish-aur.sh 0.1.1
+# And it will automatically build, test, and publish to both GitHub and AUR
 ###############################################################################
 
 set -euo pipefail
@@ -31,8 +39,22 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # Project configuration
 PROJECT_NAME="amplify"
 
+# AUR configuration
+CONFIG_DIR="${HOME}/.config/amplify-aur"
+CONFIG_FILE="${CONFIG_DIR}/config.sh"
+AUR_REPO_PATH=""
+
 # Version handling
 VERSION="${1:-}"
+
+# Handle special flags before setting version
+if [ "$VERSION" = "--setup-aur" ]; then
+    SETUP_ONLY="true"
+    VERSION=""
+else
+    SETUP_ONLY="false"
+fi
+
 CURRENT_VERSION=$(grep "pkgver=" "$PROJECT_ROOT/PKGBUILD" | cut -d= -f2)
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
@@ -285,35 +307,167 @@ show_instructions() {
     
     echo ""
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║              Publishing Instructions                       ║${NC}"
+    echo -e "${BLUE}║              Publishing Complete                           ║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     
     echo -e "${GREEN}✓ Local build successful${NC}"
     echo -e "${GREEN}✓ PKGBUILD updated with correct checksums${NC}"
-    echo ""
+    echo -e "${GREEN}✓ Pushed to GitHub${NC}"
     
+    # Check if AUR was published
+    load_aur_config
+    if [ -n "$AUR_REPO_PATH" ] && [ -d "$AUR_REPO_PATH" ]; then
+        echo -e "${GREEN}✓ Published to AUR${NC}"
+    fi
+    
+    echo ""
     echo "Next steps:"
     echo ""
-    echo "1. Push changes to GitHub:"
-    echo -e "   ${BLUE}git push origin main --tags${NC}"
+    
+    if [ -z "$AUR_REPO_PATH" ] || [ ! -d "$AUR_REPO_PATH" ]; then
+        echo "1. Set up AUR repository (one-time):"
+        echo -e "   ${BLUE}./scripts/publish-aur.sh --setup-aur${NC}"
+        echo ""
+        echo "2. Then run the publish script again for automatic AUR publication"
+    else
+        echo "Version $version is now published to:"
+        echo -e "  ${BLUE}GitHub:${NC} https://github.com/Sage563/Amplify/releases/tag/v$version"
+        echo -e "  ${BLUE}AUR:${NC} $AUR_REPO_PATH"
+    fi
+    
     echo ""
-    echo "2. For AUR publication:"
-    echo "   - Clone your AUR repository:"
-    echo -e "     ${BLUE}git clone ssh://aur@aur.archlinux.org/amplify.git${NC}"
+}
+
+###############################################################################
+# Function: Load AUR configuration
+###############################################################################
+load_aur_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE"
+    fi
+}
+
+###############################################################################
+# Function: Save AUR configuration
+###############################################################################
+save_aur_config() {
+    mkdir -p "$CONFIG_DIR"
+    cat > "$CONFIG_FILE" << EOF
+# Amplify AUR Configuration
+# Auto-generated - DO NOT EDIT MANUALLY
+AUR_REPO_PATH="$AUR_REPO_PATH"
+EOF
+    chmod 600 "$CONFIG_FILE"
+}
+
+###############################################################################
+# Function: Setup AUR repository (one-time)
+###############################################################################
+setup_aur_repo() {
+    print_header "AUR Repository Setup"
+    
+    # Load existing config
+    load_aur_config
+    
+    # Check if already configured
+    if [ -n "$AUR_REPO_PATH" ] && [ -d "$AUR_REPO_PATH" ]; then
+        print_success "AUR repository already configured at: $AUR_REPO_PATH"
+        return 0
+    fi
+    
     echo ""
-    echo "   - Copy PKGBUILD and .SRCINFO to your AUR repo:"
-    echo -e "     ${BLUE}cp PKGBUILD <aur-repo>/${NC}"
-    echo -e "     ${BLUE}cd <aur-repo>${NC}"
-    echo -e "     ${BLUE}makepkg --printsrcinfo > .SRCINFO${NC}"
+    echo "To publish to AUR, you need to clone your AUR repository."
+    echo "This is a one-time setup. The location will be remembered."
     echo ""
-    echo "   - Commit and push:"
-    echo -e "     ${BLUE}git add PKGBUILD .SRCINFO${NC}"
-    echo -e "     ${BLUE}git commit -m \"Release version $version\"${NC}"
-    echo -e "     ${BLUE}git push${NC}"
+    
+    while true; do
+        echo -n "Do you want to set up AUR repository now? (yes/no): "
+        read -r response < /dev/tty
+        case "$response" in
+            [yY][eE][sS]|[yY])
+                break
+                ;;
+            [nN][oO]|[nN])
+                print_warning "Skipping AUR setup. You can run setup later manually."
+                return 0
+                ;;
+            *)
+                echo "Please answer yes or no."
+                ;;
+        esac
+    done
+    
     echo ""
-    echo -e "${YELLOW}Note: SSH key setup is required for AUR access${NC}"
-    echo ""
+    echo "Enter the path where you want to clone the AUR repository:"
+    echo "Example: /home/advik/aur-amplify or leave blank for default"
+    echo -n "Path (or press Enter for default ~/aur-amplify): "
+    read -r repo_path < /dev/tty
+    repo_path="${repo_path:-${HOME}/aur-amplify}"
+    
+    # Expand tilde if used
+    repo_path="${repo_path/#\~/$HOME}"
+    
+    print_header "Cloning AUR repository..."
+    if git clone ssh://aur@aur.archlinux.org/amplify.git "$repo_path" 2>&1 | tee /dev/null; then
+        AUR_REPO_PATH="$repo_path"
+        save_aur_config
+        print_success "AUR repository cloned to: $repo_path"
+    else
+        print_error "Failed to clone AUR repository. Check SSH key setup at https://aur.archlinux.org"
+    fi
+}
+
+###############################################################################
+# Function: Publish to AUR
+###############################################################################
+publish_to_aur() {
+    local version=$1
+    
+    # Load config
+    load_aur_config
+    
+    # Check if AUR repo is set up
+    if [ -z "$AUR_REPO_PATH" ] || [ ! -d "$AUR_REPO_PATH" ]; then
+        print_warning "AUR repository not configured. Skipping AUR publication."
+        return 0
+    fi
+    
+    print_header "Publishing to AUR..."
+    
+    cd "$AUR_REPO_PATH" || print_error "Could not access AUR repository at $AUR_REPO_PATH"
+    
+    # Copy PKGBUILD from main repo
+    print_header "Updating PKGBUILD in AUR repo..."
+    cp "$PROJECT_ROOT/PKGBUILD" .
+    print_success "PKGBUILD copied"
+    
+    # Generate .SRCINFO
+    print_header "Generating .SRCINFO..."
+    if makepkg --printsrcinfo > .SRCINFO; then
+        print_success ".SRCINFO generated"
+    else
+        print_error "Failed to generate .SRCINFO"
+    fi
+    
+    # Check for changes
+    if ! git diff-index --quiet HEAD --; then
+        # Commit and push
+        print_header "Committing changes..."
+        git add PKGBUILD .SRCINFO
+        git commit -m "Release version $version"
+        
+        print_header "Pushing to AUR..."
+        if git push; then
+            print_success "Published to AUR successfully!"
+        else
+            print_error "Failed to push to AUR. Check your SSH key and permissions."
+        fi
+    else
+        print_warning "No changes to commit to AUR"
+    fi
+    
+    cd "$PROJECT_ROOT" || print_error "Could not return to project root"
 }
 
 ###############################################################################
@@ -352,6 +506,15 @@ push_to_github() {
 ###############################################################################
 main() {
     cd "$PROJECT_ROOT" || print_error "Could not navigate to project root"
+    
+    # Load AUR configuration
+    load_aur_config
+    
+    # Handle setup-only mode
+    if [ "$SETUP_ONLY" = "true" ]; then
+        setup_aur_repo
+        exit 0
+    fi
     
     # Check dependencies
     check_dependencies
@@ -392,6 +555,15 @@ main() {
     
     # Push to GitHub
     push_to_github
+    
+    # Set up AUR if not already done
+    if [ -z "$AUR_REPO_PATH" ] || [ ! -d "$AUR_REPO_PATH" ]; then
+        echo ""
+        setup_aur_repo
+    fi
+    
+    # Publish to AUR
+    publish_to_aur "$VERSION"
     
     # Show final instructions
     show_instructions "$VERSION"
