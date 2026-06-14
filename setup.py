@@ -4,11 +4,11 @@ from setuptools import setup, find_packages
 
 setup(
     name="amplify",
-    version="1.0.0",
+    version="1.1.1",
     description="Sound Effects Soundboard with PipeWire/PulseAudio virtual mic routing",
     author="Advik",
     author_email="advikmurthy12@gmail.com",
-    url="https://github.com/Sage563/amplify",
+    url="https://github.com/Sage563/Amplify",
     license="MIT",
     py_modules=["amplify"],
     entry_points={

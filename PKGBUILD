@@ -1,6 +1,6 @@
 # Maintainer: Advik <advikmurthy12@gmail.com>
 pkgname=amplify
-pkgver=1.1.0
+pkgver=1.1.1
 pkgrel=1
 pkgdesc="Sound Effects Soundboard with PipeWire/PulseAudio virtual mic routing"
 arch=('any')
@@ -21,7 +21,7 @@ optdepends=(
     'pulseaudio-utils: alternative to pipewire-pulse for paplay/pactl'
 )
 source=("$pkgname-$pkgver.tar.gz::https://github.com/Sage563/Amplify/archive/v$pkgver.tar.gz")
-sha256sums=('d0fcfc8272aac596fc72f330e4dc180de1c417ddf762d72cd87d47d6425b650a')
+sha256sums=('SKIP')  # Run updpkgsums after pushing the v1.1.1 tag.
 
 # For local builds during dev: comment the source/sha256sums above and use:
 # source=("$pkgname::git+file:///path/to/your/local/repo")
