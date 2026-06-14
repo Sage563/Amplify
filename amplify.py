@@ -16,6 +16,7 @@ import threading
 import subprocess
 import tempfile
 import hashlib
+import shutil
 import gzip
 import zlib
 import urllib.request
@@ -36,6 +37,8 @@ BASE_URL = "https://www.myinstants.com"
 CATEGORY_URL = f"{BASE_URL}/en/categories/sound%20effects/us/"
 SOUNDS_CACHE = CACHE_DIR / "sounds.json"
 AUDIO_CACHE = CACHE_DIR / "audio"
+PAGES_IN_MEMORY = 2
+SEARCH_AUTO_LOAD_LIMIT = 4
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -61,10 +64,10 @@ class AudioRouter:
     def _detect_backend(self):
         for cmd in [["pactl", "info"], ["pw-cli", "info", "0"]]:
             try:
-                r = subprocess.run(cmd, capture_output=True, timeout=2)
+                r = subprocess.run(cmd, capture_output=True, timeout=5)
                 if r.returncode == 0:
                     return "pipewire" if cmd[0] == "pw-cli" else "pulseaudio"
-            except FileNotFoundError:
+            except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
         return None
 
@@ -155,17 +158,11 @@ class AudioRouter:
 
     def play_to_sink(self, filepath, sink_name):
         """Play audio file to a specific sink."""
-        subprocess.Popen(
-            ["paplay", "--device", sink_name, filepath],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        play_audio_file(filepath, sink_name)
 
     def play_to_virtual_mic(self, filepath):
         """Play audio into the virtual mic sink."""
-        subprocess.Popen(
-            ["paplay", "--device", self.VIRTUAL_SINK_NAME, filepath],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        play_audio_file(filepath, self.VIRTUAL_SINK_NAME)
 
     def is_available(self):
         return self._backend is not None
@@ -285,6 +282,29 @@ def download_audio(sound):
     except Exception as e:
         print(f"Download error {sound['url']}: {e}", file=sys.stderr)
         return None
+
+
+def play_audio_file(filepath, sink_name=None, volume=100):
+    """Play an audio file, preferring PipeWire's player for MP3 support."""
+    if shutil.which("pw-play"):
+        cmd = ["pw-play", "--volume", str(max(0, volume) / 100)]
+        if sink_name:
+            cmd += ["--target", sink_name]
+        cmd.append(filepath)
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL)
+        return
+
+    if shutil.which("paplay"):
+        cmd = ["paplay"]
+        if sink_name:
+            cmd += ["--device", sink_name]
+        if volume != 100:
+            cmd += ["--volume", str(int(65536 * volume / 100))]
+        cmd.append(filepath)
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL)
+        return
+
+    print("Playback failed: neither pw-play nor paplay is installed.", file=sys.stderr)
 
 
 # Config
@@ -524,10 +544,11 @@ class RoutingBar(Gtk.Box):
 # UI: Soundboard Grid
 
 class SoundboardGrid(Gtk.ScrolledWindow):
-    def __init__(self, on_play):
+    def __init__(self, on_play, on_near_bottom):
         super().__init__()
         self.set_vexpand(True)
         self.on_play = on_play
+        self.on_near_bottom = on_near_bottom
         self._flow = Gtk.FlowBox()
         self._flow.set_valign(Gtk.Align.START)
         self._flow.set_max_children_per_line(8)
@@ -540,27 +561,74 @@ class SoundboardGrid(Gtk.ScrolledWindow):
         self._flow.set_margin_top(8)
         self._flow.set_margin_bottom(8)
         self.set_child(self._flow)
-        self._sounds = []
+        self._query = ""
+        self._sound_rows = []
+        self.get_vadjustment().connect("value-changed", self._on_scroll)
 
-    def load_sounds(self, sounds):
-        self._sounds = sounds
-        # clear
+    def clear(self):
+        self._sound_rows = []
         while (child := self._flow.get_first_child()):
             self._flow.remove(child)
+
+    def add_page(self, page, sounds):
         for sound in sounds:
             btn = SoundButton(sound, self.on_play)
+            btn._page = page
+            btn._sound_name = sound["name"].lower()
+            btn.set_visible(self._matches_query(btn))
+            self._sound_rows.append(btn)
             self._flow.append(btn)
 
-    def filter(self, query):
-        q = query.lower()
+    def prune_pages_before(self, first_page):
+        kept = []
         child = self._flow.get_first_child()
-        idx = 0
         while child:
-            sound = self._sounds[idx] if idx < len(self._sounds) else None
-            if sound:
-                child.set_visible(q in sound["name"].lower())
-            idx += 1
+            next_child = child.get_next_sibling()
+            row = self._row_from_child(child)
+            if row and getattr(row, "_page", first_page) < first_page:
+                self._flow.remove(child)
+            child = next_child
+        for row in self._sound_rows:
+            if getattr(row, "_page", first_page) >= first_page:
+                kept.append(row)
+        self._sound_rows = kept
+
+    def filter(self, query):
+        self._query = query.strip().lower()
+        child = self._flow.get_first_child()
+        while child:
+            row = self._row_from_child(child)
+            if row:
+                child.set_visible(self._matches_query(row))
             child = child.get_next_sibling()
+
+    def visible_count(self):
+        count = 0
+        child = self._flow.get_first_child()
+        while child:
+            if child.get_visible():
+                count += 1
+            child = child.get_next_sibling()
+        return count
+
+    def _matches_query(self, row):
+        return not self._query or self._query in getattr(row, "_sound_name", "")
+
+    def _row_from_child(self, child):
+        if hasattr(child, "get_child"):
+            row = child.get_child()
+            if row:
+                return row
+        return child
+
+    def _on_scroll(self, adjustment):
+        distance_from_bottom = (
+            adjustment.get_upper()
+            - adjustment.get_page_size()
+            - adjustment.get_value()
+        )
+        if distance_from_bottom < 360:
+            self.on_near_bottom()
 
 
 # Main Window
@@ -573,17 +641,33 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.router = AudioRouter()
         self.config = Config()
+        self._next_page = 1
+        self._first_loaded_page = 1
+        self._loaded_pages = set()
+        self._loading = False
+        self._last_page_reached = False
+        self._search_auto_loads = 0
 
         # Apply CSS - dark, flat theme
         css = Gtk.CssProvider()
         css.load_from_string("""
             window {
-                background: #181a1b;
-                color: #f1f3f4;
+                background: #000000;
+                color: #f5f5f5;
             }
 
-            box {
-                color: #f1f3f4;
+            window.background,
+            .background,
+            box,
+            scrolledwindow,
+            viewport,
+            flowbox,
+            popover,
+            popover contents,
+            listview,
+            row {
+                background: #000000;
+                color: #f5f5f5;
             }
 
             .sound-btn {
@@ -591,107 +675,104 @@ class MainWindow(Adw.ApplicationWindow):
                 min-height: 55px;
                 font-size: 0.8em;
                 padding: 8px;
-                background: #24272a;
-                color: #f1f3f4;
-                border: 1px solid #3a3f44;
+                background: #050505;
+                color: #f5f5f5;
+                border: 1px solid #222222;
                 border-radius: 6px;
             }
 
             .sound-btn:hover {
-                background: #2d3135;
+                background: #111111;
             }
 
             .sound-btn:active {
-                background: #343a40;
+                background: #1a1a1a;
             }
 
             .sound-btn label {
                 background: transparent;
-                color: #f1f3f4;
+                color: #f5f5f5;
             }
 
             .compact {
                 font-size: 0.85em;
-                color: #f1f3f4;
+                color: #f5f5f5;
             }
 
             .toolbar {
                 padding: 8px;
-                background: #202326;
-                border-bottom: 1px solid #33383d;
+                background: #000000;
+                border-bottom: 1px solid #202020;
             }
 
             button {
-                background: #24272a;
-                color: #f1f3f4;
-                border: 1px solid #3a3f44;
+                background: #050505;
+                color: #f5f5f5;
+                border: 1px solid #222222;
                 border-radius: 6px;
                 padding: 6px 12px;
             }
 
             button:hover {
-                background: #2d3135;
+                background: #111111;
             }
 
             button:active {
-                background: #343a40;
+                background: #1a1a1a;
             }
 
             checkbutton {
-                color: #f1f3f4;
+                background: #000000;
+                color: #f5f5f5;
             }
 
             checkbutton check {
-                background: #24272a;
-                border: 1px solid #3a3f44;
+                background: #050505;
+                border: 1px solid #333333;
             }
 
             entry, searchentry {
-                background: #24272a;
-                color: #f1f3f4;
-                border: 1px solid #3a3f44;
+                background: #050505;
+                color: #f5f5f5;
+                border: 1px solid #222222;
                 border-radius: 6px;
                 padding: 6px;
             }
 
-            entry:focus, searchentry:focus {
-                border: 1px solid #7a858f;
-            }
-
             scrollbar {
-                background: #181a1b;
+                background: #000000;
             }
 
             scrollbar slider {
-                background: #4b535a;
+                background: #333333;
                 border-radius: 4px;
             }
 
             scrollbar slider:hover {
-                background: #59626a;
+                background: #4a4a4a;
             }
 
             scale slider {
-                background: #d4dae0;
-                border: 1px solid #3a3f44;
+                background: #777777;
+                border: 1px solid #222222;
             }
 
             scale slider:hover {
-                background: #ffffff;
+                background: #aaaaaa;
             }
 
             scale trough {
-                background: #24272a;
-                border: 1px solid #3a3f44;
+                background: #050505;
+                border: 1px solid #222222;
             }
 
             separator {
-                color: #33383d;
+                color: #202020;
             }
 
             label {
                 background: transparent;
-                color: #f1f3f4;
+                color: #f5f5f5;
             }
 
             .heading {
@@ -701,18 +782,26 @@ class MainWindow(Adw.ApplicationWindow):
             }
 
             flowbox {
-                background: #181a1b;
+                background: #000000;
             }
 
             spinbutton {
-                background: #24272a;
-                color: #f1f3f4;
-                border: 1px solid #3a3f44;
+                background: #050505;
+                color: #f5f5f5;
+                border: 1px solid #222222;
                 border-radius: 6px;
             }
 
-            dropdown {
-                color: #f1f3f4;
+            dropdown,
+            dropdown button {
+                background: #050505;
+                color: #f5f5f5;
+                border-color: #222222;
+            }
+
+            text {
+                background: #333333;
+                color: #ffffff;
             }
         """)
         Gtk.StyleContext.add_provider_for_display(
@@ -747,14 +836,6 @@ class MainWindow(Adw.ApplicationWindow):
         self._search.connect("search-changed", self._on_search)
         toolbar.append(self._search)
 
-        self._page_spin = Gtk.SpinButton.new_with_range(1, 50, 1)
-        self._page_spin.set_value(1)
-        toolbar.append(Gtk.Label(label="Page:"))
-        toolbar.append(self._page_spin)
-        load_btn = Gtk.Button(label="Load")
-        load_btn.connect("clicked", self._on_load)
-        toolbar.append(load_btn)
-
         root.append(toolbar)
 
         # Routing bar
@@ -765,7 +846,7 @@ class MainWindow(Adw.ApplicationWindow):
         root.append(sep)
 
         # Grid
-        self._grid = SoundboardGrid(self._play_sound)
+        self._grid = SoundboardGrid(self._play_sound, self._load_next_page)
         root.append(self._grid)
 
         # Status bar
@@ -775,46 +856,101 @@ class MainWindow(Adw.ApplicationWindow):
         self._status.set_halign(Gtk.Align.START)
         root.append(self._status)
 
-        # Load first page
-        threading.Thread(target=self._load_page, args=(1,), daemon=True).start()
+        self._load_more_pages(PAGES_IN_MEMORY)
 
-    def _on_load(self, _):
-        page = int(self._page_spin.get_value())
-        self._status.set_text(f"Loading page {page}...")
-        threading.Thread(target=self._load_page, args=(page,), daemon=True).start()
+    def _load_next_page(self):
+        self._load_more_pages(1)
 
-    def _load_page(self, page):
-        sounds = fetch_sounds(page)
-        GLib.idle_add(self._grid.load_sounds, sounds)
-        GLib.idle_add(
-            self._status.set_text,
-            f"{len(sounds)} sounds on page {page}" if sounds else "No sounds found. Check the network or try Load again."
-        )
+    def _load_more_pages(self, count):
+        if self._loading or self._last_page_reached:
+            return
+        self._loading = True
+        start_page = self._next_page
+        self._next_page += count
+        self._status.set_text(f"Loading sounds from page {start_page}...")
+        threading.Thread(
+            target=self._load_pages_thread,
+            args=(start_page, count),
+            daemon=True
+        ).start()
+
+    def _load_pages_thread(self, start_page, count):
+        loaded = []
+        reached_end = False
+        for page in range(start_page, start_page + count):
+            sounds = fetch_sounds(page)
+            if not sounds:
+                reached_end = True
+                break
+            loaded.append((page, sounds))
+        GLib.idle_add(self._after_pages_loaded, loaded, reached_end)
+
+    def _after_pages_loaded(self, loaded, reached_end):
+        self._loading = False
+        if reached_end:
+            self._last_page_reached = True
+        if not loaded:
+            self._status.set_text("No more sounds found.")
+            return False
+
+        total_added = 0
+        for page, sounds in loaded:
+            self._loaded_pages.add(page)
+            self._grid.add_page(page, sounds)
+            total_added += len(sounds)
+
+        last_loaded_page = max(self._loaded_pages)
+        self._first_loaded_page = max(1, last_loaded_page - PAGES_IN_MEMORY + 1)
+        self._grid.prune_pages_before(self._first_loaded_page)
+        self._loaded_pages = {
+            page for page in self._loaded_pages
+            if page >= self._first_loaded_page
+        }
+
+        visible = self._grid.visible_count()
+        shown_range = f"{self._first_loaded_page}-{last_loaded_page}"
+        if self._search.get_text().strip() and visible < 12 and not self._last_page_reached:
+            if self._search_auto_loads < SEARCH_AUTO_LOAD_LIMIT:
+                self._search_auto_loads += 1
+                self._status.set_text(
+                    f"{visible} matches loaded. Searching more pages..."
+                )
+                self._load_more_pages(1)
+            else:
+                self._status.set_text(
+                    f"{visible} matches in loaded pages. Scroll for more."
+                )
+        else:
+            self._status.set_text(
+                f"{total_added} new sounds. Showing pages {shown_range}."
+            )
+        return False
 
     def _on_search(self, entry):
+        self._search_auto_loads = 0
         self._grid.filter(entry.get_text())
+        visible = self._grid.visible_count()
+        if entry.get_text().strip() and visible < 12:
+            self._search_auto_loads += 1
+            self._load_next_page()
+        elif entry.get_text().strip():
+            self._status.set_text(f"{visible} matches in loaded pages.")
+        elif self._loaded_pages:
+            last_loaded_page = max(self._loaded_pages)
+            self._status.set_text(
+                f"Showing pages {self._first_loaded_page}-{last_loaded_page}."
+            )
 
     def _play_sound(self, filepath):
         routing = self._routing_bar.get_routing()
         vol = routing["volume"]
 
         def _do_play():
-            # Set volume via pactl before playing (temp sink input volume)
-            env = os.environ.copy()
-
-            if routing["speakers"] and routing["sink"]:
-                cmd = ["paplay", "--device", routing["sink"]]
-                if vol != 100:
-                    cmd += ["--volume", str(int(65536 * vol / 100))]
-                cmd.append(filepath)
-                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+            if routing["speakers"]:
+                play_audio_file(filepath, routing["sink"], vol)
 
             if routing["virtual_mic"]:
-                cmd = ["paplay", "--device", self.router.VIRTUAL_SINK_NAME]
-                if vol != 100:
-                    cmd += ["--volume", str(int(65536 * vol / 100))]
-                cmd.append(filepath)
-                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+                play_audio_file(filepath, self.router.VIRTUAL_SINK_NAME, vol)
 
         threading.Thread(target=_do_play, daemon=True).start()
 
@@ -831,6 +967,7 @@ class MyInstantsApp(Adw.Application):
             application_id="io.github.amplify.soundboard",
             flags=Gio.ApplicationFlags.DEFAULT_FLAGS
         )
+        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
         self.connect("activate", self._on_activate)
 
     def _on_activate(self, app):

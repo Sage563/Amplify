@@ -1,6 +1,6 @@
 pkgbase = amplify
 	pkgdesc = Sound Effects Soundboard with PipeWire/PulseAudio virtual mic routing
-	pkgver = 1.1.1
+	pkgver = 1.1.4
 	pkgrel = 1
 	url = https://github.com/Sage563/Amplify
 	arch = any
@@ -13,7 +13,7 @@ pkgbase = amplify
 	depends = pipewire
 	depends = pipewire-pulse
 	optdepends = pulseaudio-utils: alternative to pipewire-pulse for paplay/pactl
-	source = amplify-1.1.1.tar.gz::https://github.com/Sage563/Amplify/archive/v1.1.1.tar.gz
+	source = amplify::git+file:///home/advik/Documents/GitHub/Amplify
 	sha256sums = SKIP
 
 pkgname = amplify

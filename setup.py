@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="amplify",
-    version="1.1.1",
+    version="1.1.4",
     description="Sound Effects Soundboard with PipeWire/PulseAudio virtual mic routing",
     author="Advik",
     author_email="advikmurthy12@gmail.com",

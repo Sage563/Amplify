@@ -1,0 +1,9 @@
+[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = true
+[remote "origin"]
+	url = file:///home/advik/Documents/GitHub/Amplify
+	tagOpt = --no-tags
+	fetch = +refs/*:refs/*
+	mirror = true

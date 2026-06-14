@@ -1,6 +1,6 @@
 # Maintainer: Advik <advikmurthy12@gmail.com>
 pkgname=amplify
-pkgver=1.1.1
+pkgver=1.1.4
 pkgrel=1
 pkgdesc="Sound Effects Soundboard with PipeWire/PulseAudio virtual mic routing"
 arch=('any')
@@ -20,19 +20,28 @@ makedepends=(
 optdepends=(
     'pulseaudio-utils: alternative to pipewire-pulse for paplay/pactl'
 )
-source=("$pkgname-$pkgver.tar.gz::https://github.com/Sage563/Amplify/archive/v$pkgver.tar.gz")
-sha256sums=('SKIP')  # Run updpkgsums after pushing the v1.1.1 tag.
+
+source=("$pkgname::git+file://$PWD")
+sha256sums=('SKIP')
 
 # For local builds during dev: comment the source/sha256sums above and use:
 # source=("$pkgname::git+file:///path/to/your/local/repo")
 
 build() {
-    cd "$srcdir/Amplify-$pkgver"
+    if [[ -d "$srcdir/$pkgname" ]]; then
+        cd "$srcdir/$pkgname"
+    else
+        cd "$srcdir/Amplify-$pkgver"
+    fi
     python setup.py build
 }
 
 package() {
-    cd "$srcdir/Amplify-$pkgver"
+    if [[ -d "$srcdir/$pkgname" ]]; then
+        cd "$srcdir/$pkgname"
+    else
+        cd "$srcdir/Amplify-$pkgver"
+    fi
     python setup.py install --root="$pkgdir" --optimize=1 --skip-build
 
     # Desktop entry
