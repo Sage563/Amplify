@@ -1,36 +1,45 @@
-# Maintainer: Amplify <advikmurthy12@gmail.com>
+# Maintainer: Advik <advikmurthy12@gmail.com>
 pkgname=amplify
-pkgver=0.1.5
+pkgver=1.0.0
 pkgrel=1
-pkgdesc="Arch Linux soundboard with PipeWire virtual microphone support"
+pkgdesc="Sound Effects Soundboard with PipeWire/PulseAudio virtual mic routing"
 arch=('any')
-url="https://github.com/Sage563/amplify"
+url="https://github.com/Sage563/Amplify"
 license=('MIT')
 depends=(
-    'python'
-    'pipewire'
+    'python>=3.10'
+    'python-gobject'         # gi bindings
+    'gtk4'
+    'libadwaita'
+    'pipewire'               # or pulseaudio, paplay/pactl come with either
+    'pipewire-pulse'         # provides paplay + pactl via PipeWire's PA layer
 )
 makedepends=(
-    'python-build'
-    'python-installer'
-    'python-wheel'
-    'python-pip'
+    'python-setuptools'
 )
 optdepends=(
-    'pulseaudio: alternative audio backend'
+    'pulseaudio-utils: alternative to pipewire-pulse for paplay/pactl'
 )
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha512sums=('f79fba49bc5bd9cbd3b3c808dc92cc07ec08b75f956b4e216596b3481b8f16f53d208af7df2ced2480fb74b276884c690916e4ce428992d6475d01659099ea9b')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/Sage563/Amplify/archive/v$pkgver.tar.gz")
+sha256sums=('d0fcfc8272aac596fc72f330e4dc180de1c417ddf762d72cd87d47d6425b650a')
+
+# For local builds during dev: comment the source/sha256sums above and use:
+# source=("$pkgname::git+file:///path/to/your/local/repo")
 
 build() {
-    cd "Amplify-$pkgver"
-    python -m build --wheel --no-isolation
+    cd "$srcdir/Amplify-$pkgver"
+    python setup.py build
 }
 
 package() {
-    cd "Amplify-$pkgver"
-    python -m installer --destdir="$pkgdir" dist/*.whl
+    cd "$srcdir/Amplify-$pkgver"
+    python setup.py install --root="$pkgdir" --optimize=1 --skip-build
 
-    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-    install -Dm644 packaging/amplify.desktop "$pkgdir/usr/share/applications/amplify.desktop"
+    # Desktop entry
+    install -Dm644 assets/amplify.desktop \
+        "$pkgdir/usr/share/applications/amplify.desktop"
+
+    # License
+    install -Dm644 LICENSE \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

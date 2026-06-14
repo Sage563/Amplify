@@ -1,142 +1,116 @@
-# Amplify - Arch Linux Soundboard
+# AMPLIFY
 
-A lightweight, flat-design soundboard application for Arch Linux with PipeWire virtual microphone support. Stream sounds directly from a CDN without storing to disk.
+GTK4 soundboard with full PipeWire/PulseAudio audio routing. Play sounds through your speakers, headphones, a virtual microphone for Discord/OBS/etc., or all at once. Your real mic keeps working passthrough.
 
-## Features
-
-- **Voicemod-style UI**: Clean, flat dark theme with no emojis or gradients
-- **Zero Storage**: Streams MP3s directly from CDN into memory, no disk writes
-- **Audio Routing**: Switch between Speaker, Microphone (virtual sink), or Both
-- **Live Search**: Filter sounds in real-time
-- **Grid Layout**: 4-column scrollable grid that reflows as you filter
-- **PipeWire Native**: Works with modern PipeWire audio stacks (PulseAudio fallback)
-- **Responsive**: Built with PyQt6 for a responsive, native GUI
-
-## Installation
-
-### From AUR (Arch Linux)
+## Install (AUR)
 
 ```bash
+# With yay
 yay -S amplify
-# or
-paru -S amplify
-```
 
-### Manual Installation (Development)
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/amplify.git
+# Or manually
+git clone https://aur.archlinux.org/amplify.git
 cd amplify
-
-# Install dependencies
-pip install -e .
-
-# Run
-amplify
+makepkg -si
 ```
 
-### Dependencies
+## Dependencies (auto-installed via pacman)
 
-- **Runtime**: `python` `python-pyqt6` `python-sounddevice` `python-soundfile` `python-httpx` `pipewire`
-- **Optional**: `pulseaudio` (fallback audio backend)
-
-## Usage
-
-1. **Launch**: Run `amplify` or select from Applications
-2. **Load Sounds**: Sounds list fetches automatically from `https://mathactivities.github.io/sd/sounds.txt`
-3. **Select Mode**:
-   - **SPEAKER**: Play sounds through default speakers
-   - **MICROPHONE**: Play sounds to a virtual microphone input (no speaker output)
-   - **BOTH**: Play to both speaker and virtual mic simultaneously
-4. **Search**: Type in the search box to filter sounds live
-5. **Adjust Volume**: Use the volume slider
-6. **Play**: Click any sound button to play
-7. **Stop All**: Press the STOP ALL button to halt all playback
+| Package | Purpose |
+|---|---|
+| `python-gobject` | GTK4 Python bindings |
+| `gtk4` | UI toolkit |
+| `libadwaita` | GNOME HIG widgets |
+| `pipewire-pulse` | Provides `paplay` + `pactl` |
 
 ## Audio Routing
 
-- **Speaker Mode**: Plays to your default audio output device
-- **Microphone Mode**: Creates a virtual sink (null sink) that acts as a virtual microphone. Select it in apps like Discord to route the sounds to your mic input without speaker feedback
-- **Both Mode**: Routes to both simultaneously
+### Speakers / Headphones
+Select your output device from the dropdown. Switches instantly, no restart needed.
 
-The virtual microphone is created automatically when you select Mic or Both mode, and destroyed on exit.
+### Virtual Microphone
+Enables a virtual microphone source that Discord, OBS, and any other app can select as their input device.
 
-## Sound List
+**How it works:**
+1. Creates a PulseAudio null-sink via `module-null-sink`
+2. Loopbacks null-sink's monitor to the virtual mic source, so apps hear the soundboard
+3. Loopbacks your real mic to the null-sink, so real mic passthrough still works
 
-Sounds are fetched fresh on every launch from:
-```
-https://mathactivities.github.io/sd/sounds.txt
-```
+**In Discord:** Settings, Voice, Input Device, then select the virtual mic
 
-Edit this file to add/remove sounds — the app will pick up changes on next restart.
+### Both
+Toggle both checkboxes. You hear it locally and it goes into your mic.
 
-Each sound is streamed from:
-```
-https://mathactivities.github.io/sd/<filename>
-```
+## Cache
 
-## Project Structure
+- Sound list: `~/.cache/amplify/sounds_p*.json`
+- Audio files: `~/.cache/amplify/audio/`
+- Config: `~/.config/amplify/config.json`
 
-```
-amplify/
-├── amplify/
-│   ├── main.py              # Entry point
-│   ├── ui/
-│   │   └── mainwindow.py    # Main window, grid, search
-│   ├── audio/
-│   │   ├── player.py        # MP3 streaming & playback
-│   │   └── router.py        # PipeWire/PulseAudio null sink
-│   └── sounds/
-│       └── soundlist.py     # CDN fetch & parsing
-├── packaging/
-│   ├── PKGBUILD             # AUR package definition
-│   └── amplify.desktop      # App launcher entry
-└── pyproject.toml           # Python package metadata
-```
-
-## Development
-
-### Running from Source
+## Local Build (Dev)
 
 ```bash
+git clone <this repo>
 cd amplify
-python -m amplify.main
+python amplify.py
 ```
 
-### Testing Audio Routing
+## Publish To AUR
 
-To verify virtual microphone setup:
+The AUR package should contain `PKGBUILD` and `.SRCINFO`. The `source=...` URL in `PKGBUILD` should point to a release tarball, usually a GitHub tag.
+
+### 1. Create and upload the release tarball
 
 ```bash
-# List PipeWire sinks
-pactl list sinks
-
-# Look for "amplify_virtual_mic" after launching in Mic mode
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
-## Troubleshooting
+GitHub will create this tarball URL automatically:
 
-### No Sound Output
-- Verify PipeWire is running: `systemctl --user status pipewire`
-- Check your default audio device in `pactl list sinks`
+```text
+https://github.com/Sage563/Amplify/archive/v1.0.0.tar.gz
+```
 
-### Virtual Microphone Not Showing
-- Ensure PipeWire or PulseAudio is running
-- Check logs: `journalctl --user -u pipewire`
-- Restart the audio service: `systemctl --user restart pipewire`
+That matches the current `PKGBUILD` source line.
 
-### Network Error Loading Sounds
-- Check internet connectivity
-- Verify CDN is accessible: `curl https://mathactivities.github.io/sd/sounds.txt`
+### 2. Update the checksum
 
-## License
+```bash
+updpkgsums
+```
 
-MIT License - See LICENSE file for details
+If `updpkgsums` is not installed:
 
-## Contributing
+```bash
+sudo pacman -S pacman-contrib
+```
 
-Contributions welcome! Please submit pull requests with:
-- Clear commit messages
-- Tests for new features
-- UI mockups if changing the layout
+### 3. Generate `.SRCINFO`
+
+```bash
+makepkg --printsrcinfo > .SRCINFO
+```
+
+### 4. Test the package locally
+
+```bash
+makepkg -si
+```
+
+### 5. Upload to AUR
+
+```bash
+git clone ssh://aur@aur.archlinux.org/amplify.git aur-amplify
+cp PKGBUILD .SRCINFO aur-amplify/
+cd aur-amplify
+git add PKGBUILD .SRCINFO
+git commit -m "Update to 1.0.0"
+git push
+```
+
+To make a source package tarball for sharing or checking before upload:
+
+```bash
+makepkg --source
+```

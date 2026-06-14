@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AMPLIFY
+Comment=Sound Effects Soundboard with PipeWire/PulseAudio virtual mic routing
+Exec=amplify
+Icon=media-playback-start
+Categories=Audio;Multimedia;
+Terminal=false
