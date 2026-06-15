@@ -21,7 +21,7 @@ optdepends=(
     'pulseaudio-utils: alternative to pipewire-pulse for paplay/pactl'
 )
 
-source=("$pkgname::git+file://$PWD")
+source=("$pkgname-$pkgver.tar.gz::https://github.com/Sage563/Amplify/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 
 # For local builds during dev: comment the source/sha256sums above and use:

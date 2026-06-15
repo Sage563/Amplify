@@ -3,10 +3,10 @@
 pkgname = amplify
 pkgbase = amplify
 xdata = pkgtype=pkg
-pkgver = 1.1.4-1
+pkgver = 1.2.4-1
 pkgdesc = Sound Effects Soundboard with PipeWire/PulseAudio virtual mic routing
 url = https://github.com/Sage563/Amplify
-builddate = 1781482116
+builddate = 1781482410
 packager = Unknown Packager
 size = 166328
 arch = any
