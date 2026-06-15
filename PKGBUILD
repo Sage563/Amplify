@@ -1,6 +1,6 @@
 # Maintainer: Advik <advikmurthy12@gmail.com>
 pkgname=amplify
-pkgver=1.1.4
+pkgver=1.2.4
 pkgrel=1
 pkgdesc="Sound Effects Soundboard with PipeWire/PulseAudio virtual mic routing"
 arch=('any')
