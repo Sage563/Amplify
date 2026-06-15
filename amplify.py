@@ -33,15 +33,17 @@ urllib.request.install_opener(urllib.request.build_opener(urllib.request.HTTPSHa
 
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "amplify"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "amplify"
+LOCAL_SOUNDS_DIR = CONFIG_DIR / "local_sounds"
 BASE_URL = "https://www.myinstants.com"
 CATEGORY_URL = f"{BASE_URL}/en/categories/sound%20effects/us/"
 SOUNDS_CACHE = CACHE_DIR / "sounds.json"
 AUDIO_CACHE = CACHE_DIR / "audio"
-PAGES_IN_MEMORY = 2
+INITIAL_PAGES_TO_LOAD = 2
 SEARCH_AUTO_LOAD_LIMIT = 4
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+LOCAL_SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
 AUDIO_CACHE.mkdir(parents=True, exist_ok=True)
 
 
@@ -56,9 +58,7 @@ class AudioRouter:
     def __init__(self):
         self._backend = self._detect_backend()
         self._virtual_sink_id = None
-        self._combined_sink_id = None
         self._null_sink_module = None
-        self._loopback_module = None
         self._real_mic_loopback = None
 
     def _detect_backend(self):
@@ -107,12 +107,13 @@ class AudioRouter:
 
     def setup_virtual_mic(self, real_mic_name=None):
         """
-        Create null sink + loopback so apps see a virtual mic.
+        Create null sink so apps see a virtual mic via its .monitor source.
         Also loopback real mic into it so regular mic still works.
         """
         self.teardown_virtual_mic()
 
-        # null sink acts as our virtual device
+        # null sink acts as our virtual device;
+        # apps use amplify_virtual_sink.monitor as their mic input
         r = subprocess.run([
             "pactl", "load-module", "module-null-sink",
             f"sink_name={self.VIRTUAL_SINK_NAME}",
@@ -120,15 +121,6 @@ class AudioRouter:
         ], capture_output=True, text=True)
         if r.returncode == 0:
             self._null_sink_module = r.stdout.strip()
-
-        # loopback: virtual sink monitor to virtual mic source (apps pick this up)
-        r2 = subprocess.run([
-            "pactl", "load-module", "module-loopback",
-            f"source={self.VIRTUAL_SINK_NAME}.monitor",
-            "latency_msec=1"
-        ], capture_output=True, text=True)
-        if r2.returncode == 0:
-            self._loopback_module = r2.stdout.strip()
 
         # loopback real mic to virtual sink so real mic audio passes through
         if real_mic_name:
@@ -144,12 +136,11 @@ class AudioRouter:
         return self._null_sink_module is not None
 
     def teardown_virtual_mic(self):
-        for mod in [self._real_mic_loopback, self._loopback_module, self._null_sink_module]:
+        for mod in [self._real_mic_loopback, self._null_sink_module]:
             if mod:
                 subprocess.run(["pactl", "unload-module", mod],
                                capture_output=True)
         self._null_sink_module = None
-        self._loopback_module = None
         self._real_mic_loopback = None
 
     def get_virtual_mic_source(self):
@@ -258,6 +249,8 @@ def decode_response(data, content_encoding):
 
 def download_audio(sound):
     """Download mp3 to cache, return local path."""
+    if sound.get("local"):
+        return sound["url"]
     h = hashlib.md5(sound["url"].encode()).hexdigest()[:8]
     local = AUDIO_CACHE / f"{h}_{sound['filename']}"
     if local.exists():
@@ -284,6 +277,23 @@ def download_audio(sound):
         return None
 
 
+def get_local_sounds():
+    """Scan local directory for audio files."""
+    sounds = []
+    if not LOCAL_SOUNDS_DIR.exists():
+        return sounds
+    for path in sorted(LOCAL_SOUNDS_DIR.iterdir()):
+        if path.is_file() and path.suffix.lower() in ['.mp3', '.wav', '.ogg', '.oga', '.m4a', '.flac']:
+            name = path.stem.replace('_', ' ').replace('-', ' ').title()
+            sounds.append({
+                "name": name,
+                "url": str(path),
+                "filename": path.name,
+                "local": True
+            })
+    return sounds
+
+
 def play_audio_file(filepath, sink_name=None, volume=100):
     """Play an audio file, preferring PipeWire's player for MP3 support."""
     if shutil.which("pw-play"):
@@ -291,7 +301,7 @@ def play_audio_file(filepath, sink_name=None, volume=100):
         if sink_name:
             cmd += ["--target", sink_name]
         cmd.append(filepath)
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL)
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return
 
     if shutil.which("paplay"):
@@ -301,7 +311,7 @@ def play_audio_file(filepath, sink_name=None, volume=100):
         if volume != 100:
             cmd += ["--volume", str(int(65536 * volume / 100))]
         cmd.append(filepath)
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL)
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return
 
     print("Playback failed: neither pw-play nor paplay is installed.", file=sys.stderr)
@@ -313,7 +323,7 @@ class Config:
     _path = CONFIG_DIR / "config.json"
     _defaults = {
         "route_speakers": True,
-        "route_virtual_mic": False,
+        "route_virtual_mic": True,
         "selected_sink": "",
         "selected_mic": "",
         "volume": 100,
@@ -343,10 +353,11 @@ class Config:
 # UI: Sound Button
 
 class SoundButton(Gtk.Box):
-    def __init__(self, sound, on_play):
+    def __init__(self, sound, on_play, on_delete=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.sound = sound
         self.on_play = on_play
+        self.on_delete = on_delete
         self.set_size_request(110, 70)
 
         btn = Gtk.Button()
@@ -363,6 +374,35 @@ class SoundButton(Gtk.Box):
         self._spinner = Gtk.Spinner()
         self._spinner.set_visible(False)
         self.append(self._spinner)
+
+        if sound.get("local") and on_delete:
+            self._popover = Gtk.Popover()
+            pop_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            pop_box.set_margin_start(4)
+            pop_box.set_margin_end(4)
+            pop_box.set_margin_top(4)
+            pop_box.set_margin_bottom(4)
+            
+            del_btn = Gtk.Button(label="Delete Sound")
+            del_btn.add_css_class("destructive-action")
+            del_btn.connect("clicked", self._on_delete_clicked)
+            pop_box.append(del_btn)
+            
+            self._popover.set_child(pop_box)
+            self._popover.set_parent(btn)
+
+            gesture = Gtk.GestureClick.new()
+            gesture.set_button(3)  # right-click
+            gesture.connect("released", self._on_right_click)
+            btn.add_controller(gesture)
+
+    def _on_right_click(self, gesture, n_press, x, y):
+        self._popover.popup()
+
+    def _on_delete_clicked(self, _btn):
+        self._popover.popdown()
+        if self.on_delete:
+            self.on_delete(self.sound)
 
     def _on_clicked(self, _btn):
         self._spinner.set_visible(True)
@@ -399,7 +439,7 @@ class RoutingBar(Gtk.Box):
 
         # Speakers toggle + sink picker
         spk_box = Gtk.Box(spacing=4)
-        self._spk_toggle = Gtk.CheckButton(label="Speakers")
+        self._spk_toggle = Gtk.CheckButton(label="Play to Speakers")
         self._spk_toggle.set_active(config.get("route_speakers"))
         self._spk_toggle.connect("toggled", self._on_spk_toggle)
         spk_box.append(self._spk_toggle)
@@ -414,14 +454,9 @@ class RoutingBar(Gtk.Box):
         sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
         self.append(sep)
 
-        # Virtual mic toggle + real mic picker
+        # Real mic picker. The virtual mic is set up automatically in the background.
         mic_box = Gtk.Box(spacing=4)
-        self._mic_toggle = Gtk.CheckButton(label="Virtual Mic")
-        self._mic_toggle.set_active(config.get("route_virtual_mic"))
-        self._mic_toggle.connect("toggled", self._on_mic_toggle)
-        mic_box.append(self._mic_toggle)
-
-        mic_label = Gtk.Label(label="Real Mic:")
+        mic_label = Gtk.Label(label="Play to Mic:")
         mic_box.append(mic_label)
 
         self._mic_combo = Gtk.DropDown()
@@ -452,9 +487,9 @@ class RoutingBar(Gtk.Box):
         refresh_btn.connect("clicked", self._on_refresh)
         self.append(refresh_btn)
 
-        # Apply virtual mic if it was enabled last session
-        if config.get("route_virtual_mic"):
-            threading.Thread(target=self._setup_virtual_mic, daemon=True).start()
+        # Sounds always route to the virtual mic when setup succeeds.
+        self.config.set("route_virtual_mic", True)
+        threading.Thread(target=self._setup_virtual_mic, daemon=True).start()
 
     def _populate_sinks(self):
         self._sinks = self.router.get_sinks()
@@ -467,37 +502,29 @@ class RoutingBar(Gtk.Box):
                 break
 
     def _populate_mics(self):
-        self._mics = self.router.get_sources()
+        self._mics = [
+            ("none", "None (Virtual Mic Disabled)"),
+            ("", "Virtual Mic Only (No Real Mic)")
+        ] + self.router.get_sources()
         names = Gtk.StringList.new([desc for _, desc in self._mics])
         self._mic_combo.set_model(names)
-        saved = self.config.get("selected_mic")
-        for i, (name, _) in enumerate(self._mics):
-            if name == saved:
-                self._mic_combo.set_selected(i)
-                break
+        self._mic_combo.set_selected(0)
 
     def _on_spk_toggle(self, btn):
         self.config.set("route_speakers", btn.get_active())
 
-    def _on_mic_toggle(self, btn):
-        active = btn.get_active()
-        self.config.set("route_virtual_mic", active)
-        if active:
-            threading.Thread(target=self._setup_virtual_mic, daemon=True).start()
-        else:
-            threading.Thread(target=self.router.teardown_virtual_mic, daemon=True).start()
-            self._mic_setup = False
-
     def _setup_virtual_mic(self):
         mic_name = self._get_selected_mic_name()
+        if mic_name == "none":
+            self.router.teardown_virtual_mic()
+            GLib.idle_add(self._after_mic_setup, False, False)
+            return
         ok = self.router.setup_virtual_mic(mic_name)
-        GLib.idle_add(self._after_mic_setup, ok)
+        GLib.idle_add(self._after_mic_setup, ok, True)
 
-    def _after_mic_setup(self, ok):
+    def _after_mic_setup(self, ok, intentional=True):
         self._mic_setup = ok
-        if not ok:
-            self._mic_toggle.set_active(False)
-            # Show error toast if Adw available
+        if not ok and intentional:
             print("Virtual mic setup failed. Is PipeWire/PulseAudio running?", file=sys.stderr)
 
     def _on_sink_changed(self, combo, _):
@@ -508,10 +535,7 @@ class RoutingBar(Gtk.Box):
     def _on_mic_changed(self, combo, _):
         idx = combo.get_selected()
         if 0 <= idx < len(self._mics):
-            self.config.set("selected_mic", self._mics[idx][0])
-            if self._mic_setup:
-                # re-setup with new real mic
-                threading.Thread(target=self._setup_virtual_mic, daemon=True).start()
+            threading.Thread(target=self._setup_virtual_mic, daemon=True).start()
 
     def _on_vol_changed(self, scale):
         self.config.set("volume", int(scale.get_value()))
@@ -535,7 +559,7 @@ class RoutingBar(Gtk.Box):
     def get_routing(self):
         return {
             "speakers": self._spk_toggle.get_active(),
-            "virtual_mic": self._mic_toggle.get_active() and self._mic_setup,
+            "virtual_mic": self._mic_setup,
             "sink": self._get_selected_sink_name(),
             "volume": int(self._vol_scale.get_value()),
         }
@@ -544,11 +568,13 @@ class RoutingBar(Gtk.Box):
 # UI: Soundboard Grid
 
 class SoundboardGrid(Gtk.ScrolledWindow):
-    def __init__(self, on_play, on_near_bottom):
+    def __init__(self, on_play, on_near_bottom, on_delete=None):
         super().__init__()
         self.set_vexpand(True)
+        self.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.on_play = on_play
         self.on_near_bottom = on_near_bottom
+        self.on_delete = on_delete
         self._flow = Gtk.FlowBox()
         self._flow.set_valign(Gtk.Align.START)
         self._flow.set_max_children_per_line(8)
@@ -572,26 +598,12 @@ class SoundboardGrid(Gtk.ScrolledWindow):
 
     def add_page(self, page, sounds):
         for sound in sounds:
-            btn = SoundButton(sound, self.on_play)
+            btn = SoundButton(sound, self.on_play, self.on_delete)
             btn._page = page
             btn._sound_name = sound["name"].lower()
             btn.set_visible(self._matches_query(btn))
             self._sound_rows.append(btn)
             self._flow.append(btn)
-
-    def prune_pages_before(self, first_page):
-        kept = []
-        child = self._flow.get_first_child()
-        while child:
-            next_child = child.get_next_sibling()
-            row = self._row_from_child(child)
-            if row and getattr(row, "_page", first_page) < first_page:
-                self._flow.remove(child)
-            child = next_child
-        for row in self._sound_rows:
-            if getattr(row, "_page", first_page) >= first_page:
-                kept.append(row)
-        self._sound_rows = kept
 
     def filter(self, query):
         self._query = query.strip().lower()
@@ -611,6 +623,15 @@ class SoundboardGrid(Gtk.ScrolledWindow):
             child = child.get_next_sibling()
         return count
 
+    def is_near_bottom(self):
+        adjustment = self.get_vadjustment()
+        distance_from_bottom = (
+            adjustment.get_upper()
+            - adjustment.get_page_size()
+            - adjustment.get_value()
+        )
+        return distance_from_bottom < 360
+
     def _matches_query(self, row):
         return not self._query or self._query in getattr(row, "_sound_name", "")
 
@@ -622,12 +643,7 @@ class SoundboardGrid(Gtk.ScrolledWindow):
         return child
 
     def _on_scroll(self, adjustment):
-        distance_from_bottom = (
-            adjustment.get_upper()
-            - adjustment.get_page_size()
-            - adjustment.get_value()
-        )
-        if distance_from_bottom < 360:
+        if self.is_near_bottom():
             self.on_near_bottom()
 
 
@@ -719,6 +735,20 @@ class MainWindow(Adw.ApplicationWindow):
 
             button:active {
                 background: #1a1a1a;
+            }
+
+            .destructive-action {
+                background: #6e1616;
+                color: #f5f5f5;
+                border-color: #400f0f;
+            }
+
+            .destructive-action:hover {
+                background: #8b0000;
+            }
+
+            .destructive-action:active {
+                background: #aa0000;
             }
 
             checkbutton {
@@ -813,6 +843,10 @@ class MainWindow(Adw.ApplicationWindow):
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_content(root)
 
+        # Stack view for switching pages
+        self._stack = Adw.ViewStack()
+        self._stack.set_vexpand(True)
+
         # Compact inline toolbar (no window chrome / nav bar)
         toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         toolbar.add_css_class("toolbar")
@@ -836,6 +870,15 @@ class MainWindow(Adw.ApplicationWindow):
         self._search.connect("search-changed", self._on_search)
         toolbar.append(self._search)
 
+        sep_switcher = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        sep_switcher.set_margin_start(4)
+        sep_switcher.set_margin_end(4)
+        toolbar.append(sep_switcher)
+
+        switcher = Adw.ViewSwitcher()
+        switcher.set_stack(self._stack)
+        toolbar.append(switcher)
+
         root.append(toolbar)
 
         # Routing bar
@@ -845,9 +888,31 @@ class MainWindow(Adw.ApplicationWindow):
         sep = Gtk.Separator()
         root.append(sep)
 
-        # Grid
-        self._grid = SoundboardGrid(self._play_sound, self._load_next_page)
-        root.append(self._grid)
+        # Online Grid
+        self._online_grid = SoundboardGrid(self._play_sound, self._load_next_page)
+        self._stack.add_titled(self._online_grid, "online_page", "Explore Instants")
+
+        # Local Box & Grid
+        local_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        local_box.set_vexpand(True)
+
+        local_toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        local_toolbar.set_margin_start(8)
+        local_toolbar.set_margin_end(8)
+        local_toolbar.set_margin_top(6)
+        local_toolbar.set_margin_bottom(6)
+
+        upload_btn = Gtk.Button(label="Upload Audio File")
+        upload_btn.connect("clicked", self._on_upload_clicked)
+        local_toolbar.append(upload_btn)
+        local_box.append(local_toolbar)
+
+        self._local_grid = SoundboardGrid(self._play_sound, lambda: None, on_delete=self._on_local_sound_delete)
+        local_box.append(self._local_grid)
+
+        self._stack.add_titled(local_box, "local_page", "My Sounds")
+
+        root.append(self._stack)
 
         # Status bar
         self._status = Gtk.Label(label="Loading sounds...")
@@ -856,7 +921,10 @@ class MainWindow(Adw.ApplicationWindow):
         self._status.set_halign(Gtk.Align.START)
         root.append(self._status)
 
-        self._load_more_pages(PAGES_IN_MEMORY)
+        self._stack.connect("notify::visible-child", self._on_stack_changed)
+
+        self._load_local_sounds()
+        self._load_more_pages(INITIAL_PAGES_TO_LOAD)
 
     def _load_next_page(self):
         self._load_more_pages(1)
@@ -896,18 +964,12 @@ class MainWindow(Adw.ApplicationWindow):
         total_added = 0
         for page, sounds in loaded:
             self._loaded_pages.add(page)
-            self._grid.add_page(page, sounds)
+            self._online_grid.add_page(page, sounds)
             total_added += len(sounds)
 
         last_loaded_page = max(self._loaded_pages)
-        self._first_loaded_page = max(1, last_loaded_page - PAGES_IN_MEMORY + 1)
-        self._grid.prune_pages_before(self._first_loaded_page)
-        self._loaded_pages = {
-            page for page in self._loaded_pages
-            if page >= self._first_loaded_page
-        }
 
-        visible = self._grid.visible_count()
+        visible = self._online_grid.visible_count()
         shown_range = f"{self._first_loaded_page}-{last_loaded_page}"
         if self._search.get_text().strip() and visible < 12 and not self._last_page_reached:
             if self._search_auto_loads < SEARCH_AUTO_LOAD_LIMIT:
@@ -927,19 +989,91 @@ class MainWindow(Adw.ApplicationWindow):
         return False
 
     def _on_search(self, entry):
-        self._search_auto_loads = 0
-        self._grid.filter(entry.get_text())
-        visible = self._grid.visible_count()
-        if entry.get_text().strip() and visible < 12:
-            self._search_auto_loads += 1
-            self._load_next_page()
-        elif entry.get_text().strip():
-            self._status.set_text(f"{visible} matches in loaded pages.")
-        elif self._loaded_pages:
-            last_loaded_page = max(self._loaded_pages)
-            self._status.set_text(
-                f"Showing pages {self._first_loaded_page}-{last_loaded_page}."
-            )
+        query = entry.get_text()
+        active = self._stack.get_visible_child_name()
+        if active == "online_page":
+            self._search_auto_loads = 0
+            self._online_grid.filter(query)
+            visible = self._online_grid.visible_count()
+            if query.strip() and visible < 12:
+                self._search_auto_loads += 1
+                self._load_next_page()
+            elif query.strip():
+                self._status.set_text(f"{visible} matches in loaded pages.")
+            elif self._loaded_pages:
+                last_loaded_page = max(self._loaded_pages)
+                self._status.set_text(
+                    f"Showing pages {self._first_loaded_page}-{last_loaded_page}."
+                )
+        else:
+            self._local_grid.filter(query)
+            visible = self._local_grid.visible_count()
+            self._status.set_text(f"{visible} local sounds found.")
+
+    def _load_local_sounds(self):
+        self._local_grid.clear()
+        sounds = get_local_sounds()
+        self._local_grid.add_page(1, sounds)
+
+    def _on_stack_changed(self, stack, pspec):
+        active = stack.get_visible_child_name()
+        if active == "local_page":
+            self._load_local_sounds()
+            self._local_grid.filter(self._search.get_text())
+            self._status.set_text(f"{self._local_grid.visible_count()} local sounds.")
+        else:
+            visible = self._online_grid.visible_count()
+            if self._search.get_text().strip():
+                self._status.set_text(f"{visible} matches in loaded pages.")
+            elif self._loaded_pages:
+                last_loaded_page = max(self._loaded_pages)
+                self._status.set_text(
+                    f"Showing online pages {self._first_loaded_page}-{last_loaded_page}."
+                )
+
+    def _on_upload_clicked(self, _btn):
+        dialog = Gtk.FileChooserNative(
+            title="Upload Sound Effect or Music",
+            transient_for=self,
+            action=Gtk.FileChooserAction.OPEN,
+            accept_label="_Open",
+            cancel_label="_Cancel"
+        )
+        filter_audio = Gtk.FileFilter()
+        filter_audio.set_name("Audio Files")
+        filter_audio.add_mime_type("audio/*")
+        for ext in ["*.mp3", "*.wav", "*.ogg", "*.oga", "*.m4a", "*.flac"]:
+            filter_audio.add_pattern(ext)
+        dialog.add_filter(filter_audio)
+        
+        dialog.connect("response", self._on_upload_response)
+        dialog.show()
+
+    def _on_upload_response(self, dialog, response_id):
+        if response_id == Gtk.ResponseType.ACCEPT:
+            gfile = dialog.get_file()
+            src_path = Path(gfile.get_path())
+            if src_path.exists():
+                dest_path = LOCAL_SOUNDS_DIR / src_path.name
+                try:
+                    shutil.copy(src_path, dest_path)
+                    self._load_local_sounds()
+                    self._local_grid.filter(self._search.get_text())
+                    self._status.set_text(f"Uploaded and saved: {src_path.name}")
+                except Exception as e:
+                    self._status.set_text(f"Failed to save file: {str(e)}")
+        dialog.destroy()
+
+    def _on_local_sound_delete(self, sound):
+        path = Path(sound["url"])
+        if path.exists():
+            try:
+                path.unlink()
+                self._load_local_sounds()
+                self._local_grid.filter(self._search.get_text())
+                self._status.set_text(f"Deleted sound: {sound['name']}")
+            except Exception as e:
+                self._status.set_text(f"Failed to delete sound: {str(e)}")
 
     def _play_sound(self, filepath):
         routing = self._routing_bar.get_routing()
