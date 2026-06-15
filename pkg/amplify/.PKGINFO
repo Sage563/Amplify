@@ -6,9 +6,9 @@ xdata = pkgtype=pkg
 pkgver = 1.1.4-1
 pkgdesc = Sound Effects Soundboard with PipeWire/PulseAudio virtual mic routing
 url = https://github.com/Sage563/Amplify
-builddate = 1781478885
+builddate = 1781482116
 packager = Unknown Packager
-size = 143917
+size = 166328
 arch = any
 license = MIT
 depend = python>=3.10
